@@ -83,8 +83,4 @@ CREATE TABLE queue_entries (
     status VARCHAR(20) DEFAULT 'Waiting' -- 'Waiting', 'Serving', 'Completed', 'Cancelled'
 );
 
--- Seed Data: Faculty (Basic seeding, main seeding occurs in seed.js)
-INSERT INTO faculty (name, department, room_number, floor_number, aliases, specialization, research_interests, bio) VALUES
-('Dr. Prashant Kumar', 'Computer Science', 'CS-101', '1st Floor', ARRAY['Prash', 'PK'], 'Artificial Intelligence', 'Machine learning in healthcare, deep neural networks, computer vision, natural language processing.', 'Dr. Prashant is an associate professor in CSE department with 10+ years of research experience in deep learning and healthcare analytics.'),
-('Dr. Anjali Sharma', 'Mathematics', 'MATH-202', '2nd Floor', ARRAY['Anjali', 'AS'], 'Machine Learning', 'Linear algebra, optimization algorithms, probability models, graph theory and cryptography.', 'Dr. Anjali is a passionate researcher focusing on numerical analysis and mathematical foundations of neural networks.'),
-('Dr. Vikram Singh', 'Physics', 'PHY-305', '3rd Floor', ARRAY['Vikram', 'VS'], 'Quantum Computing', 'Quantum computing algorithms, semiconductor physics, simulation of electromagnetic fields, nanotechnology.', 'Dr. Vikram leads the quantum optics lab and works on next-generation computing technologies and nanomaterials.');
+

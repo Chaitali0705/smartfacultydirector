@@ -82,6 +82,62 @@ const sendVerificationEmail = async (email, role, code, req) => {
     }
 };
 
+// Send Meeting Reminder Email to Faculty
+const sendMeetingReminderEmail = async (facultyEmail, facultyName, studentName, studentEmail, reason, day, start, end) => {
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+        console.log('⚠️ EMAIL_USER or EMAIL_APP_PASSWORD not set in environment. Real reminder email not sent.');
+        return;
+    }
+
+    try {
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_APP_PASSWORD.replace(/\s/g, '')
+            }
+        });
+
+        const mailOptions = {
+            from: `"Smart Campus Scheduler" <${process.env.EMAIL_USER}>`,
+            to: facultyEmail,
+            subject: `📅 Scheduled Meeting Reminder - ${studentName}`,
+            html: `
+                <div style="font-family: sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #eee; border-radius: 10px; background-color: #ffffff; color: #333;">
+                    <h2 style="color: #7c2ae8; text-align: center;">New Scheduled Appointment</h2>
+                    <p>Hello <b>${facultyName}</b>,</p>
+                    <p>A student has successfully scheduled a meeting with you. Here are the meeting details:</p>
+                    <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                        <tr>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee; font-weight: bold; width: 30%;">Student Name:</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${studentName}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee; font-weight: bold;">Student Email:</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${studentEmail}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee; font-weight: bold;">Time & Day:</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${day}, ${start.slice(0, 5)} - ${end.slice(0, 5)}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee; font-weight: bold;">Reason:</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #eee;">${reason}</td>
+                        </tr>
+                    </table>
+                    <hr style="border: none; border-top: 1px solid #eee; margin-top: 30px;">
+                    <p style="font-size: 10px; color: #aaa; text-align: center;">This is an automated reminder from the Smart Faculty Directory.</p>
+                </div>
+            `
+        };
+
+        const info = await transporter.sendMail(mailOptions);
+        console.log(`✅ Meeting reminder email successfully sent to ${facultyEmail}: ${info.response}`);
+    } catch (error) {
+        console.error(`❌ Reminders error for ${facultyEmail}:`, error.message);
+    }
+};
+
 // Initialize Trie with data from DB
 const initializeTrie = async () => {
     try {
@@ -168,24 +224,7 @@ const calculateAvailability = (timetables, faculty) => {
     const isBeforeWorkingHours = currentTimeStr < '09:00:00';
     const isAfterWorkingHours = currentTimeStr > '16:30:00';
 
-    if (isWeekend) {
-        return {
-            status: 'Not Available',
-            currentDetails: 'Outside Working Hours',
-            bestVisitingTime: 'Monday at 09:00'
-        };
-    }
-
-    if (isAfterWorkingHours) {
-        const nextDay = currentDay === 'Friday' ? 'Monday' : 'Tomorrow';
-        return {
-            status: 'Not Available',
-            currentDetails: 'Outside Working Hours',
-            bestVisitingTime: `${nextDay} at 09:00`
-        };
-    }
-
-    // Add duty to classes list for availability optimization if it is on the current day
+    // Build today's classes and duties list
     const todaysClasses = timetables
         .filter(t => t.day_of_week === currentDay)
         .map(t => ({ ...t, is_duty: false }))
@@ -201,7 +240,7 @@ const calculateAvailability = (timetables, faculty) => {
         todaysClasses.sort((a, b) => a.start_time.localeCompare(b.start_time));
     }
 
-    // 1. Check if currently in class or on duty (only relevant if during working hours)
+    // 1. Check if currently in class or on duty (override outside working hours if active!)
     const currentMins = timeToMinutes(currentTimeStr);
     const currentActivityItem = todaysClasses.find(t => {
         const startMins = timeToMinutes(t.start_time);
@@ -212,10 +251,7 @@ const calculateAvailability = (timetables, faculty) => {
     let status = 'Likely Available';
     let currentDetails = 'No class scheduled right now.';
 
-    if (isBeforeWorkingHours) {
-        status = 'Not Available';
-        currentDetails = 'Outside Working Hours';
-    } else if (currentActivityItem) {
+    if (currentActivityItem) {
         if (currentActivityItem.is_duty) {
             status = 'Not Available';
             currentDetails = `${currentActivityItem.course_name} (${currentActivityItem.start_time.slice(0, 5)} - ${currentActivityItem.end_time.slice(0, 5)})`;
@@ -223,49 +259,60 @@ const calculateAvailability = (timetables, faculty) => {
             status = 'In Class';
             currentDetails = `Class: ${currentActivityItem.course_name} (${currentActivityItem.start_time.slice(0, 5)} - ${currentActivityItem.end_time.slice(0, 5)})`;
         }
+    } else if (isWeekend) {
+        status = 'Not Available';
+        currentDetails = 'Outside Working Hours';
+    } else if (isBeforeWorkingHours || isAfterWorkingHours) {
+        status = 'Not Available';
+        currentDetails = 'Outside Working Hours';
     }
 
     // 2. Find Best Visiting Time (Next Free Slot)
-    const evalTimeStr = isBeforeWorkingHours ? '09:00:00' : currentTimeStr;
-
-    // Find the first free time T >= evalTimeStr
-    let T = evalTimeStr;
-    while (true) {
-        const tMins = timeToMinutes(T);
-        const occupyingClass = todaysClasses.find(c => {
-            const startMins = timeToMinutes(c.start_time);
-            const endMins = timeToMinutes(c.end_time);
-            return tMins >= startMins && tMins < endMins;
-        });
-        if (occupyingClass) {
-            T = occupyingClass.end_time;
-        } else {
-            break;
-        }
-    }
-
     let bestVisitingTime = "Unknown";
-    if (T >= '16:30:00') {
+    if (isWeekend) {
+        bestVisitingTime = 'Monday at 09:00';
+    } else if (isAfterWorkingHours) {
         const nextDay = currentDay === 'Friday' ? 'Monday' : 'Tomorrow';
         bestVisitingTime = `${nextDay} at 09:00`;
     } else {
-        // Find first class starting after T
-        const nextClass = todaysClasses.find(c => c.start_time > T);
-        let endSlot = '16:30:00';
-        if (nextClass && nextClass.start_time < '16:30:00') {
-            endSlot = nextClass.start_time;
+        const evalTimeStr = isBeforeWorkingHours ? '09:00:00' : currentTimeStr;
+        let T = evalTimeStr;
+        while (true) {
+            const tMins = timeToMinutes(T);
+            const occupyingClass = todaysClasses.find(c => {
+                const startMins = timeToMinutes(c.start_time);
+                const endMins = timeToMinutes(c.end_time);
+                return tMins >= startMins && tMins < endMins;
+            });
+            if (occupyingClass) {
+                T = occupyingClass.end_time;
+            } else {
+                break;
+            }
         }
 
-        const formattedStart = T.slice(0, 5);
-        const formattedEnd = endSlot.slice(0, 5);
-
-        if (isBeforeWorkingHours) {
-            bestVisitingTime = `Today at ${formattedStart} (Free until ${formattedEnd})`;
+        if (T >= '16:30:00') {
+            const nextDay = currentDay === 'Friday' ? 'Monday' : 'Tomorrow';
+            bestVisitingTime = `${nextDay} at 09:00`;
         } else {
-            if (T === currentTimeStr) {
-                bestVisitingTime = `Now (Free until ${formattedEnd})`;
+            // Find first class starting after T
+            const nextClass = todaysClasses.find(c => c.start_time > T);
+            let endSlot = '16:30:00';
+            if (nextClass && nextClass.start_time < '16:30:00') {
+                endSlot = nextClass.start_time;
+            }
+
+            const formattedStart = T.slice(0, 5);
+            const formattedEnd = endSlot.slice(0, 5);
+
+            if (isBeforeWorkingHours) {
+                bestVisitingTime = `Today at ${formattedStart} (Free until ${formattedEnd})`;
             } else {
-                bestVisitingTime = `After ${formattedStart} (Free until ${formattedEnd})`;
+                if (T === currentTimeStr) {
+                    bestVisitingTime = `Now (Free until ${formattedEnd})`;
+                } else {
+                    bestVisitingTime = `After ${formattedStart} (Free until ${formattedEnd})`;
+                }
             }
         }
     }
@@ -464,7 +511,7 @@ app.post('/api/faculty', async (req, res) => {
 
 // --- Auth Routes: Faculty ---
 app.post('/api/signup', async (req, res) => {
-    const { name, email, shortform, password, specialization } = req.body;
+    const { name, email, shortform, password, specialization, department } = req.body;
 
     // Enforce Domain Check
     if (!email || !email.endsWith('@rvce.edu.in')) {
@@ -472,12 +519,18 @@ app.post('/api/signup', async (req, res) => {
     }
 
     try {
+        // Check if email is registered in students
+        const studentCheck = await pool.query('SELECT * FROM students WHERE email = $1', [email]);
+        if (studentCheck.rows.length > 0) {
+            return res.status(400).json({ error: 'email already registered' });
+        }
+
         // If user already exists but is unverified, regenerate verification code and update password
         const existingRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         if (existingRes.rows.length > 0) {
             const existingUser = existingRes.rows[0];
             if (existingUser.is_verified) {
-                return res.status(400).json({ error: 'Email is already registered.' });
+                return res.status(400).json({ error: 'email already registered' });
             } else {
                 // Reuse existing code (don't regenerate - it causes email/DB mismatch if user re-submits)
                 const verificationCode = existingUser.verification_code || Math.floor(100000 + Math.random() * 900000).toString();
@@ -495,7 +548,7 @@ app.post('/api/signup', async (req, res) => {
 
         const facultyRes = await pool.query(
             'INSERT INTO faculty (name, department, room_number, floor_number, aliases, specialization) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-            [name, 'Computer Science', 'TBD', 'TBD', [shortform], specialization || '']
+            [name, department || 'Computer Science', 'TBD', 'TBD', [shortform], specialization || '']
         );
         const facultyId = facultyRes.rows[0].id;
 
@@ -569,12 +622,18 @@ app.post('/api/student/signup', async (req, res) => {
     }
 
     try {
+        // Check if email is registered in users (faculty)
+        const facultyCheck = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        if (facultyCheck.rows.length > 0) {
+            return res.status(400).json({ error: 'email already registered' });
+        }
+
         // If student already exists but is unverified, regenerate verification code and update password
         const existingRes = await pool.query('SELECT * FROM students WHERE email = $1', [email]);
         if (existingRes.rows.length > 0) {
             const existingStudent = existingRes.rows[0];
             if (existingStudent.is_verified) {
-                return res.status(400).json({ error: 'Email is already registered.' });
+                return res.status(400).json({ error: 'email already registered' });
             } else {
                 // Reuse existing code (don't regenerate - it causes email/DB mismatch if user re-submits)
                 const verificationCode = existingStudent.verification_code || Math.floor(100000 + Math.random() * 900000).toString();
@@ -716,6 +775,7 @@ app.get('/api/verify-link', async (req, res) => {
     }
 
     try {
+        let userData = {};
         if (role === 'faculty') {
             const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
             if (result.rows.length === 0) {
@@ -726,6 +786,12 @@ app.get('/api/verify-link', async (req, res) => {
                 return res.status(400).send('<h1>Invalid or expired verification link</h1>');
             }
             await pool.query('UPDATE users SET is_verified = true, verification_code = null WHERE id = $1', [user.id]);
+            userData = {
+                username: user.username,
+                email: user.email,
+                facultyId: user.faculty_id,
+                role: 'faculty'
+            };
         } else {
             const result = await pool.query('SELECT * FROM students WHERE email = $1', [email]);
             if (result.rows.length === 0) {
@@ -736,6 +802,12 @@ app.get('/api/verify-link', async (req, res) => {
                 return res.status(400).send('<h1>Invalid or expired verification link</h1>');
             }
             await pool.query('UPDATE students SET is_verified = true, verification_code = null WHERE id = $1', [student.id]);
+            userData = {
+                id: student.id,
+                name: student.name,
+                email: student.email,
+                role: 'student'
+            };
         }
 
         // Determine frontend URL dynamically (x-forwarded-proto can be comma-separated on Vercel)
@@ -749,7 +821,17 @@ app.get('/api/verify-link', async (req, res) => {
             frontendUrl = `${protocol}://${host}`;
         }
 
-        res.redirect(`${frontendUrl}/login?verified=true`);
+        const queryParams = new URLSearchParams({
+            verified: 'true',
+            autologin: 'true',
+            role: userData.role,
+            email: userData.email,
+            ...(userData.role === 'faculty' 
+                ? { username: userData.username, facultyId: userData.facultyId }
+                : { id: userData.id, name: userData.name })
+        });
+
+        res.redirect(`${frontendUrl}/login?${queryParams.toString()}`);
     } catch (err) {
         console.error(err);
         res.status(500).send('<h1>Verification failed due to a server error</h1>');
@@ -815,7 +897,13 @@ app.post('/api/faculty/:id/appointments', async (req, res) => {
             [facultyId, student_id, reason, day_of_week, start_time, end_time]
         );
 
-        res.json(insertRes.rows[0]);
+        // Run auto-scheduler automatically
+        await processGreedyScheduling(facultyId, day_of_week);
+
+        // Fetch the updated appointment state to return (it might have been scheduled or declined!)
+        const updatedRes = await pool.query('SELECT * FROM appointments WHERE id = $1', [insertRes.rows[0].id]);
+        
+        res.json(updatedRes.rows[0]);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to create appointment request' });
@@ -902,38 +990,69 @@ app.get('/api/faculty/:id/recommend-slots', async (req, res) => {
     }
 });
 
+// Helper to process Greedy scheduling for a faculty's day
+const processGreedyScheduling = async (faculty_id, day_of_week) => {
+    // Fetch all appointments for day
+    const appointmentsRes = await pool.query(
+        'SELECT * FROM appointments WHERE faculty_id = $1 AND day_of_week = $2',
+        [faculty_id, day_of_week]
+    );
+    const appointments = appointmentsRes.rows;
+
+    const pending = appointments.filter(a => a.status === 'Pending');
+    const scheduled = appointments.filter(a => a.status === 'Scheduled');
+
+    const { scheduled: toSchedule, rejected: toReject } = scheduleAppointments(pending, scheduled);
+
+    const facultyInfo = await pool.query('SELECT name FROM faculty WHERE id = $1', [faculty_id]);
+    const facultyName = facultyInfo.rows[0].name;
+
+    // Update to Scheduled and send email reminders
+    for (const item of toSchedule) {
+        await pool.query("UPDATE appointments SET status = 'Scheduled' WHERE id = $1", [item.id]);
+
+        // Fetch details for reminder
+        const detailRes = await pool.query(
+            `SELECT s.name as student_name, s.email as student_email, 
+                    f.name as faculty_name, u.email as faculty_email
+             FROM students s
+             JOIN faculty f ON f.id = $2
+             JOIN users u ON u.faculty_id = f.id
+             WHERE s.id = $1`,
+            [item.student_id, faculty_id]
+        );
+
+        if (detailRes.rows.length > 0) {
+            const info = detailRes.rows[0];
+            await sendMeetingReminderEmail(
+                info.faculty_email,
+                info.faculty_name,
+                info.student_name,
+                info.student_email,
+                item.reason,
+                day_of_week,
+                item.start_time,
+                item.end_time
+            );
+        }
+    }
+
+    // Update to Declined due to conflict and Notify Students
+    for (const item of toReject) {
+        await pool.query("UPDATE appointments SET status = 'Declined' WHERE id = $1", [item.id]);
+        const msg = `Your appointment request with ${facultyName} on ${day_of_week} from ${item.start_time.slice(0, 5)} to ${item.end_time.slice(0, 5)} was rejected due to a scheduling conflict.`;
+        await pool.query('INSERT INTO notifications (student_id, message) VALUES ($1, $2)', [item.student_id, msg]);
+    }
+
+    return { scheduledCount: toSchedule.length, rejectedCount: toReject.length };
+};
+
 // Run Greedy Interval Scheduling (Auto-approve optimal set)
 app.post('/api/appointments/process-greedy', async (req, res) => {
     const { faculty_id, day_of_week } = req.body;
     try {
-        // Fetch all appointments for day
-        const appointmentsRes = await pool.query(
-            'SELECT * FROM appointments WHERE faculty_id = $1 AND day_of_week = $2',
-            [faculty_id, day_of_week]
-        );
-        const appointments = appointmentsRes.rows;
-
-        const pending = appointments.filter(a => a.status === 'Pending');
-        const scheduled = appointments.filter(a => a.status === 'Scheduled');
-
-        const { scheduled: toSchedule, rejected: toReject } = scheduleAppointments(pending, scheduled);
-
-        const facultyInfo = await pool.query('SELECT name FROM faculty WHERE id = $1', [faculty_id]);
-        const facultyName = facultyInfo.rows[0].name;
-
-        // Update to Scheduled
-        for (const item of toSchedule) {
-            await pool.query("UPDATE appointments SET status = 'Scheduled' WHERE id = $1", [item.id]);
-        }
-
-        // Update to Declined due to conflict and Notify Students
-        for (const item of toReject) {
-            await pool.query("UPDATE appointments SET status = 'Declined' WHERE id = $1", [item.id]);
-            const msg = `Your appointment request with ${facultyName} on ${day_of_week} from ${item.start_time.slice(0, 5)} to ${item.end_time.slice(0, 5)} was rejected due to a scheduling conflict.`;
-            await pool.query('INSERT INTO notifications (student_id, message) VALUES ($1, $2)', [item.student_id, msg]);
-        }
-
-        res.json({ success: true, scheduledCount: toSchedule.length, rejectedCount: toReject.length });
+        const counts = await processGreedyScheduling(faculty_id, day_of_week);
+        res.json({ success: true, ...counts });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Scheduling process failed' });
@@ -945,6 +1064,33 @@ app.post('/api/appointments/approve/:id', async (req, res) => {
     const { id } = req.params;
     try {
         await pool.query("UPDATE appointments SET status = 'Scheduled' WHERE id = $1", [id]);
+
+        // Fetch full appointment, student, and faculty details to send reminder
+        const detailRes = await pool.query(
+            `SELECT a.*, s.name as student_name, s.email as student_email, 
+                    f.name as faculty_name, u.email as faculty_email
+             FROM appointments a 
+             JOIN students s ON a.student_id = s.id 
+             JOIN faculty f ON a.faculty_id = f.id
+             JOIN users u ON u.faculty_id = f.id
+             WHERE a.id = $1`,
+            [id]
+        );
+
+        if (detailRes.rows.length > 0) {
+            const app = detailRes.rows[0];
+            await sendMeetingReminderEmail(
+                app.faculty_email,
+                app.faculty_name,
+                app.student_name,
+                app.student_email,
+                app.reason,
+                app.day_of_week,
+                app.start_time,
+                app.end_time
+            );
+        }
+
         res.json({ success: true });
     } catch (err) {
         console.error(err);

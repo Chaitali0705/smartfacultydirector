@@ -13,9 +13,33 @@ const Login = () => {
     useEffect(() => {
         const queryParams = new URLSearchParams(location.search);
         if (queryParams.get('verified') === 'true') {
-            setVerifiedMsg('Your email has been successfully verified! Please log in.');
+            if (queryParams.get('autologin') === 'true') {
+                const userRole = queryParams.get('role');
+                const userEmail = queryParams.get('email');
+                if (userRole === 'faculty') {
+                    const sessionUser = {
+                        username: queryParams.get('username'),
+                        email: userEmail,
+                        facultyId: queryParams.get('facultyId'),
+                        role: 'faculty'
+                    };
+                    localStorage.setItem('user', JSON.stringify(sessionUser));
+                    navigate('/dashboard');
+                } else if (userRole === 'student') {
+                    const sessionUser = {
+                        id: queryParams.get('id'),
+                        name: queryParams.get('name'),
+                        email: userEmail,
+                        role: 'student'
+                    };
+                    localStorage.setItem('user', JSON.stringify(sessionUser));
+                    navigate('/student-dashboard');
+                }
+            } else {
+                setVerifiedMsg('Your email has been successfully verified! Please log in.');
+            }
         }
-    }, [location]);
+    }, [location, navigate]);
     
     // Form inputs
     const [nameOrEmail, setNameOrEmail] = useState(''); // Holds full name for faculty, email for student

@@ -12,7 +12,8 @@ const Signup = () => {
         email: '',
         shortform: '',
         password: '',
-        specialization: ''
+        specialization: '',
+        department: 'Computer Science'
     });
 
     // Student Form State
@@ -129,6 +130,19 @@ const Signup = () => {
                             <div>
                                 <label className="block text-sm text-white/80 mb-1">Specialization</label>
                                 <input name="specialization" type="text" onChange={handleFacultyChange} value={facultyData.specialization} className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:bg-white/10" placeholder="e.g. AI, IoT" />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-white/80 mb-1">Department</label>
+                                <select 
+                                    name="department" 
+                                    onChange={handleFacultyChange} 
+                                    value={facultyData.department} 
+                                    className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:bg-white/10 cursor-pointer text-white"
+                                    required
+                                >
+                                    <option value="Computer Science" className="text-black">Computer Science</option>
+                                    <option value="Electronics and Communication" className="text-black">Electronics and Communication</option>
+                                </select>
                             </div>
                             <div>
                                 <label className="block text-sm text-white/80 mb-1">Password</label>
